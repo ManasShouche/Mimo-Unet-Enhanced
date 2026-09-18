@@ -3,7 +3,10 @@ import torch
 import argparse
 from torch.backends import cudnn
 from models.MIMOUNet import build_net
-from train import _train
+
+# MODIFIED: Import enhanced training function
+from train_enhanced import _train_enhanced as _train
+
 from eval import _eval
 
 
@@ -46,9 +49,8 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
 
     # Directories
-    # MODIFIED: Add new model choices
     parser.add_argument('--model_name', 
-                       default='MIMO-UNet', 
+                       default='MIMO-UNetPlus',  # Changed default to Plus
                        choices=[
                            'MIMO-UNet',              # Original baseline
                            'MIMO-UNetPlus',          # Original Plus
@@ -61,34 +63,54 @@ if __name__ == '__main__':
                        help='Model architecture to use')
     
     parser.add_argument('--data_dir', type=str, default='dataset/GOPRO')
-    parser.add_argument('--mode', default='test', choices=['train', 'test'], type=str)
+    parser.add_argument('--mode', default='train', choices=['train', 'test'], type=str)
 
     # Train
     parser.add_argument('--batch_size', type=int, default=4)
     parser.add_argument('--learning_rate', type=float, default=1e-4)
     parser.add_argument('--weight_decay', type=float, default=0)
-    parser.add_argument('--num_epoch', type=int, default=3000)
-    parser.add_argument('--print_freq', type=int, default=100)
+    parser.add_argument('--num_epoch', type=int, default=1500)  # Changed from 3000 to 1500
+    parser.add_argument('--print_freq', type=int, default=50)  # Changed to 50 for more frequent updates
     parser.add_argument('--num_worker', type=int, default=8)
-    parser.add_argument('--save_freq', type=int, default=100)
-    parser.add_argument('--valid_freq', type=int, default=100)
+    parser.add_argument('--save_freq', type=int, default=50)  # Changed to 50
+    parser.add_argument('--valid_freq', type=int, default=10)  # Changed to 10 for more frequent validation
     parser.add_argument('--resume', type=str, default='')
     parser.add_argument('--gamma', type=float, default=0.5)
     parser.add_argument('--lr_steps', type=list, default=[(x+1) * 500 for x in range(3000//500)])
 
-    # NEW: Add these arguments for enhanced model training
+    # Pretrained/Staged training
     parser.add_argument('--pretrained_path', 
                        type=str, 
                        default='',
                        help='Path to pretrained MIMO-UNet weights (.pkl file)')
     parser.add_argument('--staged_training', 
                        type=bool, 
-                       default=True,
+                       default=False,  # Changed to False (we're using enhanced training)
                        help='Use staged training (freeze encoder first, then fine-tune)')
     parser.add_argument('--stage1_epochs', 
                        type=int, 
                        default=50,
                        help='Number of epochs for stage 1 (training new modules only)')
+
+    # NEW: Enhanced training arguments
+    parser.add_argument('--use_cosine_annealing', 
+                       action='store_true',
+                       help='Use cosine annealing LR schedule')
+    
+    parser.add_argument('--restart_period', 
+                       type=int, 
+                       default=100,
+                       help='Restart period for cosine annealing')
+    
+    parser.add_argument('--freq_loss_weight', 
+                       type=float, 
+                       default=0.1,
+                       help='Weight for frequency domain loss')
+    
+    parser.add_argument('--gradient_clip', 
+                       type=float, 
+                       default=1.0,
+                       help='Gradient clipping max norm')
 
     # Test
     parser.add_argument('--test_model', type=str, default='weights/MIMO-UNet.pkl')
@@ -99,21 +121,26 @@ if __name__ == '__main__':
     args.result_dir = os.path.join('results/', args.model_name, 'result_image/')
     
     # NEW: Print configuration
-    print(f"\n{'='*60}")
+    print(f"\n{'='*70}")
     print("CONFIGURATION")
-    print(f"{'='*60}")
+    print(f"{'='*70}")
     print(f"Model:          {args.model_name}")
     print(f"Mode:           {args.mode}")
     print(f"Data dir:       {args.data_dir}")
     if args.mode == 'train':
-        print(f"Batch size:     {args.batch_size}")
-        print(f"Learning rate:  {args.learning_rate}")
-        print(f"Epochs:         {args.num_epoch}")
+        print(f"\nTraining Parameters:")
+        print(f"  Batch size:     {args.batch_size}")
+        print(f"  Learning rate:  {args.learning_rate}")
+        print(f"  Epochs:         {args.num_epoch}")
+        print(f"  Cosine anneal:  {args.use_cosine_annealing}")
+        if args.use_cosine_annealing:
+            print(f"  Restart period: {args.restart_period}")
+        print(f"  Freq loss wt:   {args.freq_loss_weight}")
+        print(f"  Gradient clip:  {args.gradient_clip}")
         if args.pretrained_path:
-            print(f"Pretrained:     {args.pretrained_path}")
-            print(f"Staged train:   {args.staged_training}")
-            if args.staged_training:
-                print(f"Stage 1 epochs: {args.stage1_epochs}")
-    print(f"{'='*60}\n")
+            print(f"  Pretrained:     {args.pretrained_path}")
+        if args.resume:
+            print(f"  Resume from:    {args.resume}")
+    print(f"{'='*70}\n")
     
     main(args)
