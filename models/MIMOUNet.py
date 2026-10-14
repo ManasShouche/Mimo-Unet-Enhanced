@@ -323,30 +323,31 @@ class CBAM(nn.Module):
 # ============= NEW FREQUENCY MODULE (ADD THIS) =============
 
 class FrequencyBranch(nn.Module):
-    """FFT-based Frequency Domain Processing"""
+    """FFT-based frequency-domain processing.
+
+    Fixed 2026-10: the previous version combined a ``out_channels``-channel processed magnitude with the
+    ``in_channels``-channel imaginary part in ``torch.complex``, which always raised a shape error; a bare
+    ``except:`` then silently ran a plain spatial convolution instead, so the frequency path never executed.
+    Now: refine the magnitude spectrum per channel (1x1 convs, residual), keep the phase, transform back,
+    then project to ``out_channels``. No silent fallback: errors propagate.
+    """
     def __init__(self, in_channels, out_channels):
         super(FrequencyBranch, self).__init__()
-        self.process = nn.Sequential(
+        self.mag_process = nn.Sequential(
+            BasicConv(in_channels, in_channels, kernel_size=1, stride=1, relu=True),
+            BasicConv(in_channels, in_channels, kernel_size=1, stride=1, relu=False)
+        )
+        self.out_proj = nn.Sequential(
             BasicConv(in_channels, out_channels, kernel_size=3, stride=1, relu=True),
             BasicConv(out_channels, out_channels, kernel_size=3, stride=1, relu=False)
         )
-    
+
     def forward(self, x):
-        # Use torch.fft (newer PyTorch) with fallback
-        try:
-            fft = torch.fft.rfft2(x, norm='ortho')
-            fft_real = fft.real
-            fft_imag = fft.imag
-            
-            mag = torch.sqrt(fft_real**2 + fft_imag**2 + 1e-8)
-            mag_processed = self.process(mag)
-            
-            out = torch.fft.irfft2(torch.complex(mag_processed, fft_imag), s=x.shape[-2:], norm='ortho')
-        except:
-            # Fallback to spatial processing
-            out = self.process(x)
-        
-        return out
+        fft = torch.fft.rfft2(x, norm='backward')
+        mag, pha = fft.abs(), fft.angle()
+        mag = mag + self.mag_process(mag)
+        y = torch.fft.irfft2(torch.polar(mag, pha), s=x.shape[-2:], norm='backward')
+        return self.out_proj(y)
 
 
 # ============= NEW REFINEMENT MODULE (ADD THIS) =============

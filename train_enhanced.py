@@ -15,6 +15,18 @@ from torch.utils.tensorboard import SummaryWriter
 from valid import _valid
 
 
+
+def fft_l1_loss(criterion, pred, target):
+    """Frequency loss as in the official MIMO-UNet: unnormalised 2-D FFT, one L1 over stacked real/imag parts.
+
+    Fixed 2026-10: the previous version used ``rfft2(norm='ortho')`` (divides by sqrt(H*W)) and summed separate
+    real/imag L1 terms while keeping the 0.1 weight, making the FFT term ~128x weaker on 256x256 crops; bare
+    ``except:`` blocks could also silently set it to zero.
+    """
+    pf = torch.view_as_real(torch.fft.fft2(pred.float(), norm='backward'))
+    tf = torch.view_as_real(torch.fft.fft2(target.float(), norm='backward'))
+    return criterion(pf, tf)
+
 def _train_enhanced(model, args):
     """
     Enhanced training with cosine annealing and better logging
@@ -146,23 +158,10 @@ def _train_enhanced(model, args):
             l3 = criterion(pred_img[2], label_img)
             loss_content = l1 + l2 + l3
             
-            # Frequency loss (FFT-based)
-            try:
-                label_fft1 = torch.fft.rfft2(label_img4, norm='ortho')
-                pred_fft1 = torch.fft.rfft2(pred_img[0], norm='ortho')
-                label_fft2 = torch.fft.rfft2(label_img2, norm='ortho')
-                pred_fft2 = torch.fft.rfft2(pred_img[1], norm='ortho')
-                label_fft3 = torch.fft.rfft2(label_img, norm='ortho')
-                pred_fft3 = torch.fft.rfft2(pred_img[2], norm='ortho')
-                
-                f1 = criterion(pred_fft1.real, label_fft1.real) + criterion(pred_fft1.imag, label_fft1.imag)
-                f2 = criterion(pred_fft2.real, label_fft2.real) + criterion(pred_fft2.imag, label_fft2.imag)
-                f3 = criterion(pred_fft3.real, label_fft3.real) + criterion(pred_fft3.imag, label_fft3.imag)
-                loss_fft = f1 + f2 + f3
-            except:
-                loss_fft = torch.tensor(0.0).to(device)
-            
-            # Total loss
+            # Frequency loss: unnormalised FFT as in the official MIMO-UNet (see fft_l1_loss)
+            loss_fft = (fft_l1_loss(criterion, pred_img[0], label_img4) + fft_l1_loss(criterion, pred_img[1], label_img2)
+                        + fft_l1_loss(criterion, pred_img[2], label_img))
+
             loss = loss_content + freq_weight * loss_fft
             loss.backward()
             
